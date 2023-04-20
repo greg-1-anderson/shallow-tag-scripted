@@ -7,7 +7,11 @@ WORK="$HOME/tmp/shallow-tag-work"
 SIMULATED_EXTERNAL="$WORK/simulated-external"
 SIMULATED_PANTHEON="$WORK/simulated-pantheon"
 
+SIMULATED_HYBRID="$WORK/simulated-hybrid"
+
 SIMULATED_FIXED="$WORK/simulated-pantheon-fixed"
+SIMULATED_SIB="$WORK/simulated-sib"
+SCRATCH_EXTERNAL_GIT_DIR="$WORK/scratch-external-git-dir"
 
 rm -rf $WORK
 mkdir -p $WORK
@@ -15,20 +19,79 @@ mkdir -p $WORK
 
 # This is our simulated external repository.
 SIMULATED_EXTERNAL_URL=https://github.com/namespacebrian/drupal-10-composer-managed-upstream.git
-git clone $SIMULATED_EXTERNAL_URL --depth=1 $SIMULATED_EXTERNAL
+# git clone $SIMULATED_EXTERNAL_URL --depth=1 $SIMULATED_EXTERNAL
 
 SIMULATED_PANTHEON_URL=ssh://codeserver.dev.5671ead7-32a5-4b01-9e15-179e50bb5b43@codeserver.dev.5671ead7-32a5-4b01-9e15-179e50bb5b43.drush.in:2222/~/repository.git
 # This is opur simulated Pantheon repository. It's a real Pantheon repository, but we'll use our local working copy as our remote.
 git clone $SIMULATED_PANTHEON_URL $SIMULATED_PANTHEON
 
+# Make a work dir that is like the SIB image
+mkdir -p $SIMULATED_SIB
+
+# Make a work dir JUST for the .git dir of the external repo's local working copy
+SCRATCH_EXTERNAL_GIT_DIR=$WORK/
+
 (
-	# Configure our simulated repo such that its "origin" points at our simulated
-	# pantheon repo. We'll also keep the original "origin" as "external", although
-	# this remote does not exist on Pantheon
-	cd $SIMULATED_EXTERNAL
-	git remote rename origin external
-	git remote add origin $SIMULATED_PANTHEON
-	git checkout -b master
+	# These are the steps that the SIB does to pull from the code server.
+	# We need to pull the files first, even if we are not going to use them,
+	# because we need to initialize the .git local working copy to point to
+	# HEAD of the working branch. Note that in SIB, the code to set up the
+	# initial code pull is the same for internal (codeserver) and external
+	# repositories alike.
+	cd $SIMULATED_SIB
+	git init
+	# git config user.email & user.name
+	git remote add origin "$SIMULATED_PANTHEON"
+	# git config to set the binding cert and ca cert
+	git pull --depth=1 "$SIMULATED_PANTHEON" master
+
+	###
+	### Hack to pull the files from the external repository. We are going
+	### to grab just the files without modifying our local working copy at
+	### all; we want that to still be set up to point at the code server,
+	### so that SJS can pull and push artifact tags there.
+	###
+
+	# Clean everything in our local working repo EXCEPT FOR .git
+	# (hack just delete the dot files we know happen to be there, because I am lazy)
+	rm -rf *
+	rm -f .gitattributes
+	rm -f .gitignore
+
+	# Make another local working copy to pull external repo to
+	mkdir -p "$SCRATCH_EXTERNAL_GIT_DIR"
+	(cd "$SCRATCH_EXTERNAL_GIT_DIR" && git init)
+
+	# Note that .git dir of scratch external working copy is modified,
+	# but the FILES pulled end up at the cwd
+	git --git-dir="$SCRATCH_EXTERNAL_GIT_DIR/.git" pull --depth=1 "$SIMULATED_EXTERNAL_URL" main
+
+	# We need to commit the files on top of the HEAD commit from the code
+	# server so that our shenanigans below work correctly. It would be
+	# cool if we also grabbed the author and comment from the top commit
+	# of the external repo. Note that if we wanted these commit comments
+	# to display on the dashboard too, that there are potentially multiple
+	# commits in the external repo, and we'd have to pull at a greater depth
+	# to get them all. How deep? :shrug:
+	git add -fA .
+	git commit -m "Stuff from external repo"
+
+	# `git pull` switches our branch to the branch we pulled? Hm. Go back to `master`.
+	# Most of the time these branches should be the SAME, but not for the fixtures I picked. :p
+	# Probably won't need to ever do anything like this in actual SIB code.
+	git checkout -B master
+
+	###
+	### End SIB PoC hacky hack.
+	###
+
+	# This way also worked, but was not very much like the SIB process
+	#git init
+	#git pull --depth=1 $SIMULATED_EXTERNAL_URL main
+	#rm -rf .git
+	#cp -R $SIMULATED_PANTHEON/.git $SIMULATED_HYBRID
+	#git add -fA .
+	#git commit -m "Stuff from external repo"
 
 	# Now we start doing the steps that SJS does
 	git fetch --depth=1 origin tag pantheon_build_artifacts_master
@@ -77,17 +140,18 @@ git clone $SIMULATED_PANTHEON_URL $SIMULATED_PANTHEON
 	### of HEAD of the "external" repo.
 	###
 
-	CODESERVER_URL=$(git config --get remote.origin.url)
-	git clone --depth=1 $CODESERVER_URL $SIMULATED_FIXED
-	rm -rf .git
-	mv -f $SIMULATED_FIXED/.git .
+	# This 'git clone' hack did fix things up in the context of SJS, but we'd rather not fix things up here
+#	CODESERVER_URL=$(git config --get remote.origin.url)
+#	git clone --depth=1 $CODESERVER_URL $SIMULATED_FIXED
+#	rm -rf .git
+#	mv -f $SIMULATED_FIXED/.git .
 
-	# This, in theory does a checkout without changing the working files, but it did not work.
+	# This, in theory does a checkout without changing the working files, but this was not sufficient
 #	git symbolic-ref HEAD refs/heads/master
 #	git reset
 
-	echo "In theory, we are still clean here"
-	git status --porcelain
+	#echo "In theory, we are still clean here"
+	#git status --porcelain
 
 	# SJS simulated process continues here
 
@@ -97,6 +161,6 @@ git clone $SIMULATED_PANTHEON_URL $SIMULATED_PANTHEON
 	BUILT_SHA=$(git rev-parse HEAD)
 	git tag -f -m "Build artifacts added by simulated Pantheon from commit $BUILD_FROM_SHA" pantheon_build_artifacts_master $BUILT_SHA
 
-	# Looks like site job scripts does not force push the tag, but that is necessary, since the tag already exists, right?
+	# Looks like site job scripts does not force push the tag, but that SHOULD be necessary, since the tag already exists, right?
 	git push -f origin pantheon_build_artifacts_master
 )
