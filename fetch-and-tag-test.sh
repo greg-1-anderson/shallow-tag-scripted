@@ -43,7 +43,9 @@ SCRATCH_EXTERNAL_GIT_DIR=$WORK/
 	# git config user.email & user.name
 	git remote add origin "$SIMULATED_PANTHEON"
 	# git config to set the binding cert and ca cert
-	git pull --depth=1 "$SIMULATED_PANTHEON" master
+	# git pull --depth=1 "$SIMULATED_PANTHEON" master
+	git fetch --depth=1 origin master
+	git checkout master
 
 	###
 	### Hack to pull the files from the external repository. We are going
@@ -101,7 +103,7 @@ SCRATCH_EXTERNAL_GIT_DIR=$WORK/
 	# with and without this step. It neither helps nor hurts.
 	git fetch --depth=1 origin master
 
-	BUILD_FROM_SHA=$(git rev-parse master)
+	BUILD_FROM_SHA=$(git rev-parse HEAD)
 
 	echo "Should not be much here yet"
 	ls web
